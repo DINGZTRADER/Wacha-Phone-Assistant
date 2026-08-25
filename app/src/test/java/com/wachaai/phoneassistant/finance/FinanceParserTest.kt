@@ -56,6 +56,20 @@ class FinanceParserTest {
         assertEquals(BigDecimal("1250"), tx.amount)
     }
 
+    @Test
+    fun parsesLoanInterestAsMoneyOut() {
+        val tx = FinanceParser.parse(
+            sms(
+                sender = "MTN MoMo",
+                text = "Loan interest UGX 3,500 has been deducted from your wallet. Balance UGX 45,000.",
+            ),
+        )
+
+        assertNotNull(tx)
+        assertEquals(FinanceType.INTEREST_PAID, tx!!.type)
+        assertEquals(BigDecimal("3500"), tx.amount)
+    }
+
     private fun sms(sender: String, text: String): CapturedMessage = CapturedMessage(
         id = "test",
         notificationKey = "key",
