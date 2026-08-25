@@ -31,7 +31,7 @@ jobs:
           packages: ''
 
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-37.1" "build-tools;37.1.0"
+        run: sdkmanager "platforms;android-37.1" "build-tools;37.0.0"
 
       - name: Set up Gradle 9.5
         uses: gradle/actions/setup-gradle@v4
