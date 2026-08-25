@@ -13,6 +13,7 @@ import com.wachaai.phoneassistant.ai.AiResult
 import com.wachaai.phoneassistant.ai.OpenAiClient
 import com.wachaai.phoneassistant.data.CapturedMessage
 import com.wachaai.phoneassistant.data.MessageSource
+import com.wachaai.phoneassistant.intelligence.ReplyStyle
 import com.wachaai.phoneassistant.risk.RiskClassifier
 import com.wachaai.phoneassistant.risk.RiskLevel
 import kotlinx.coroutines.CoroutineScope
@@ -98,12 +99,24 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         app.messageRepository.capture(message)
 
         if (!allowAutoReply || source == MessageSource.SMS || replyTarget == null) return
-        if (!app.settingsStore.isAutoReplyEnabled(message.conversationKey())) return
+        val conversationKey = message.conversationKey()
+        if (!app.settingsStore.isAutoReplyEnabled(conversationKey)) return
         val apiKey = app.secretStore.getOpenAiApiKey() ?: return
         if (!app.autoReplyRegistry.claim(message.id)) return
 
+        val style = ReplyStyle.fromStored(app.settingsStore.replyStyleName(conversationKey))
+        val guidance = app.settingsStore.replyGuidance(conversationKey)
+
         serviceScope.launch {
-            when (val draft = aiClient.suggestReply(apiKey, message.sender, message.text)) {
+            when (
+                val draft = aiClient.suggestReply(
+                    apiKey = apiKey,
+                    sender = message.sender,
+                    message = message.text,
+                    style = style,
+                    guidance = guidance,
+                )
+            ) {
                 is AiResult.Success -> {
                     val assessment = RiskClassifier.assess(message.text, draft.reply)
                     if (assessment.level == RiskLevel.NORMAL) {
