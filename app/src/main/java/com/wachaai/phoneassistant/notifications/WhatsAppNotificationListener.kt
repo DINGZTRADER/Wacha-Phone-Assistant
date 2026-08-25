@@ -1,13 +1,25 @@
 package com.wachaai.phoneassistant.notifications
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.RemoteInput
 import android.content.Intent
 import android.os.Bundle
+import android.provider.Telephony
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.wachaai.phoneassistant.WachaPhoneAssistantApp
+import com.wachaai.phoneassistant.ai.AiResult
+import com.wachaai.phoneassistant.ai.OpenAiClient
 import com.wachaai.phoneassistant.data.CapturedMessage
+import com.wachaai.phoneassistant.data.MessageSource
+import com.wachaai.phoneassistant.risk.RiskClassifier
+import com.wachaai.phoneassistant.risk.RiskLevel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 sealed interface ReplyResult {
     data object Success : ReplyResult
@@ -18,6 +30,9 @@ sealed interface ReplyResult {
 }
 
 class WhatsAppNotificationListener : NotificationListenerService() {
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val aiClient = OpenAiClient()
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -25,20 +40,21 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        serviceScope.cancel()
         super.onDestroy()
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        activeNotifications?.forEach(::captureIfWhatsApp)
+        activeNotifications?.forEach { captureSupportedMessage(it, allowAutoReply = false) }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
-        sbn?.let(::captureIfWhatsApp)
+        sbn?.let { captureSupportedMessage(it, allowAutoReply = true) }
     }
 
-    private fun captureIfWhatsApp(sbn: StatusBarNotification) {
-        if (sbn.packageName !in WHATSAPP_PACKAGES) return
+    private fun captureSupportedMessage(sbn: StatusBarNotification, allowAutoReply: Boolean) {
+        val source = sourceForPackage(sbn.packageName) ?: return
         val notification = sbn.notification
         if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
 
@@ -57,19 +73,75 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
         if (sender.isBlank() || text.isBlank()) return
 
-        val app = application as WachaPhoneAssistantApp
-        app.messageRepository.capture(
-            CapturedMessage(
-                id = "${sbn.key}:${sbn.postTime}",
-                notificationKey = sbn.key,
-                packageName = sbn.packageName,
-                sender = sender,
-                text = text,
-                postedAt = sbn.postTime,
-                capturedAt = System.currentTimeMillis(),
-                hasReplyAction = findReplyTarget(notification) != null,
-            ),
+        val accountHint = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)
+            ?.toString()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        val fingerprint = buildAccountFingerprint(sbn.packageName, notification, accountHint, source)
+        val replyTarget = if (source == MessageSource.SMS) null else findReplyTarget(notification)
+
+        val message = CapturedMessage(
+            id = "${sbn.key}:${sbn.postTime}",
+            notificationKey = sbn.key,
+            packageName = sbn.packageName,
+            source = source,
+            accountFingerprint = fingerprint,
+            accountHint = accountHint,
+            sender = sender,
+            text = text,
+            postedAt = sbn.postTime,
+            capturedAt = System.currentTimeMillis(),
+            hasReplyAction = replyTarget != null,
         )
+
+        val app = application as WachaPhoneAssistantApp
+        app.messageRepository.capture(message)
+
+        if (!allowAutoReply || source == MessageSource.SMS || replyTarget == null) return
+        if (!app.settingsStore.isAutoReplyEnabled(message.conversationKey())) return
+        val apiKey = app.secretStore.getOpenAiApiKey() ?: return
+        if (!app.autoReplyRegistry.claim(message.id)) return
+
+        serviceScope.launch {
+            when (val draft = aiClient.suggestReply(apiKey, message.sender, message.text)) {
+                is AiResult.Success -> {
+                    val assessment = RiskClassifier.assess(message.text, draft.reply)
+                    if (assessment.level == RiskLevel.SAFE) {
+                        sendReplyInternal(message.notificationKey, draft.reply)
+                    }
+                }
+                is AiResult.Failure -> Unit
+            }
+        }
+    }
+
+    private fun sourceForPackage(packageName: String): MessageSource? {
+        return when (packageName) {
+            "com.whatsapp" -> MessageSource.WHATSAPP
+            "com.whatsapp.w4b" -> MessageSource.WHATSAPP_BUSINESS
+            Telephony.Sms.getDefaultSmsPackage(this) -> MessageSource.SMS
+            else -> null
+        }
+    }
+
+    private fun buildAccountFingerprint(
+        packageName: String,
+        notification: Notification,
+        accountHint: String?,
+        source: MessageSource,
+    ): String {
+        if (source == MessageSource.SMS) return "sms|$packageName"
+
+        val channelId = notification.channelId.orEmpty()
+        val channelGroup = runCatching {
+            getSystemService(NotificationManager::class.java)
+                .getNotificationChannel(channelId)
+                ?.group
+                .orEmpty()
+        }.getOrDefault("")
+
+        return listOf(packageName, channelGroup, accountHint.orEmpty(), channelId)
+            .joinToString("|")
     }
 
     private fun sendReplyInternal(notificationKey: String, text: String): ReplyResult {
@@ -112,11 +184,6 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     )
 
     companion object {
-        private val WHATSAPP_PACKAGES = setOf(
-            "com.whatsapp",
-            "com.whatsapp.w4b",
-        )
-
         @Volatile
         private var instance: WhatsAppNotificationListener? = null
 
