@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.wachaai.phoneassistant"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.wachaai.phoneassistant"
