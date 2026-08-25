@@ -48,8 +48,14 @@ import com.wachaai.phoneassistant.ai.OpenAiClient
 import com.wachaai.phoneassistant.data.CapturedMessage
 import com.wachaai.phoneassistant.data.MessageSource
 import com.wachaai.phoneassistant.finance.DailyReportGenerator
+import com.wachaai.phoneassistant.finance.FinanceAnalytics
+import com.wachaai.phoneassistant.finance.FinanceAnomaly
 import com.wachaai.phoneassistant.finance.FinanceParser
+import com.wachaai.phoneassistant.finance.PeriodFinanceSummary
 import com.wachaai.phoneassistant.finance.senderTrustKey
+import com.wachaai.phoneassistant.intelligence.CommunicationBrief
+import com.wachaai.phoneassistant.intelligence.CommunicationInsights
+import com.wachaai.phoneassistant.intelligence.ReplyStyle
 import com.wachaai.phoneassistant.notifications.ReplyResult
 import com.wachaai.phoneassistant.notifications.WhatsAppNotificationListener
 import com.wachaai.phoneassistant.report.DailyReportWorker
@@ -139,6 +145,7 @@ private fun WachaAssistantScreen(
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var pendingSensitiveReply by remember { mutableStateOf<SensitiveReply?>(null) }
     var showReport by remember { mutableStateOf(false) }
+    var showCommunicationBrief by remember { mutableStateOf(false) }
 
     var reportEmail by remember(settings.reportEmail) { mutableStateOf(settings.reportEmail) }
     var reportEndpoint by remember(settings.reportEndpoint) { mutableStateOf(settings.reportEndpoint) }
@@ -149,6 +156,19 @@ private fun WachaAssistantScreen(
         DailyReportGenerator.generate(messages, settings.trustedFinanceSenders)
     }
     val reportText = remember(report) { DailyReportGenerator.renderPlainText(report) }
+    val communicationBrief = remember(messages) { CommunicationInsights.generate(messages) }
+    val communicationBriefText = remember(communicationBrief) {
+        CommunicationInsights.renderPlainText(communicationBrief)
+    }
+    val weeklyFinance = remember(messages, settings.trustedFinanceSenders) {
+        FinanceAnalytics.weekly(messages, settings.trustedFinanceSenders)
+    }
+    val monthlyFinance = remember(messages, settings.trustedFinanceSenders) {
+        FinanceAnalytics.monthly(messages, settings.trustedFinanceSenders)
+    }
+    val financeAnomalies = remember(messages, settings.trustedFinanceSenders) {
+        FinanceAnalytics.detectAnomalies(messages, settings.trustedFinanceSenders)
+    }
 
     fun speak(text: String) {
         if (!ttsReady) {
@@ -197,7 +217,7 @@ private fun WachaAssistantScreen(
     ) {
         item {
             Text("Wacha Phone Assistant", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("WhatsApp • SMS • Daily Money Report", style = MaterialTheme.typography.bodyMedium)
+            Text("Stage 3 • WhatsApp intelligence • SMS • Finance insights", style = MaterialTheme.typography.bodyMedium)
         }
 
         item {
@@ -222,6 +242,24 @@ private fun WachaAssistantScreen(
                     apiKeyInput = ""
                     statusMessage = "OpenAI API key removed."
                 },
+            )
+        }
+
+        item {
+            CommunicationIntelligenceCard(
+                brief = communicationBrief,
+                briefText = communicationBriefText,
+                expanded = showCommunicationBrief,
+                onToggleExpanded = { showCommunicationBrief = !showCommunicationBrief },
+                onReadAloud = { speak(communicationBriefText) },
+            )
+        }
+
+        item {
+            FinanceIntelligenceCard(
+                weekly = weeklyFinance,
+                monthly = monthlyFinance,
+                anomalies = financeAnomalies,
             )
         }
 
@@ -285,7 +323,8 @@ private fun WachaAssistantScreen(
                     Text("Liquidity in: UGX ${report.totalLiquidityIn.toPlainString()}")
                     Text("External out: UGX ${report.totalExternalOut.toPlainString()}")
                     Text("Savings moved in: UGX ${report.savingsDeposited.toPlainString()}")
-                    Text("Interest/rewards: UGX ${report.interestEarned.toPlainString()}")
+                    Text("Interest earned: UGX ${report.interestEarned.toPlainString()}")
+                    Text("Interest paid/charged: UGX ${report.interestPaid.toPlainString()}")
                     Text("Unverified finance SMS excluded: ${report.unverifiedFinancialMessages.size}")
                     TextButton(onClick = { showReport = !showReport }) {
                         Text(if (showReport) "Hide full report" else "Show full report")
@@ -332,18 +371,36 @@ private fun WachaAssistantScreen(
         }
 
         items(messages, key = { it.id }) { message ->
+            val conversationKey = message.conversationKey()
+            val replyStyle = ReplyStyle.fromStored(settings.replyStyles[conversationKey])
+            val replyGuidance = settings.replyGuidance[conversationKey].orEmpty()
+
             MessageCard(
                 message = message,
                 accountLabel = settings.accountLabels[message.accountFingerprint],
                 isFinanceTrusted = message.senderTrustKey() in settings.trustedFinanceSenders,
-                autoReplyEnabled = message.conversationKey() in settings.autoReplyConversationKeys,
+                autoReplyEnabled = conversationKey in settings.autoReplyConversationKeys,
+                replyStyle = replyStyle,
+                replyGuidance = replyGuidance,
                 suggestedReply = suggestions[message.id],
                 isLoading = loading[message.id] == true,
                 onReadAloud = { speak("Message from ${message.sender}. ${message.text}") },
                 onAssignAirtel = { app.settingsStore.assignAccountLabel(message.accountFingerprint, AIRTEL_WHATSAPP_LABEL) },
                 onAssignMtn = { app.settingsStore.assignAccountLabel(message.accountFingerprint, MTN_WHATSAPP_LABEL) },
                 onToggleFinanceTrust = { trusted -> app.settingsStore.setTrustedFinanceSender(message.sender, trusted) },
-                onToggleAutoReply = { enabled -> app.settingsStore.setAutoReply(message.conversationKey(), enabled) },
+                onToggleAutoReply = { enabled -> app.settingsStore.setAutoReply(conversationKey, enabled) },
+                onCycleReplyStyle = {
+                    app.settingsStore.setReplyStyle(conversationKey, replyStyle.next().name)
+                    statusMessage = "${message.sender} reply style changed to ${replyStyle.next().displayName}."
+                },
+                onSaveReplyGuidance = { guidance ->
+                    app.settingsStore.setReplyGuidance(conversationKey, guidance)
+                    statusMessage = if (guidance.isBlank()) {
+                        "Chat guidance cleared for ${message.sender}."
+                    } else {
+                        "Chat guidance saved for ${message.sender}."
+                    }
+                },
                 onSuggestedReplyChanged = { suggestions[message.id] = it },
                 onSuggestReply = {
                     val apiKey = app.secretStore.getOpenAiApiKey()
@@ -352,10 +409,18 @@ private fun WachaAssistantScreen(
                     } else {
                         scope.launch {
                             loading[message.id] = true
-                            when (val result = aiClient.suggestReply(apiKey, message.sender, message.text)) {
+                            when (
+                                val result = aiClient.suggestReply(
+                                    apiKey = apiKey,
+                                    sender = message.sender,
+                                    message = message.text,
+                                    style = replyStyle,
+                                    guidance = replyGuidance,
+                                )
+                            ) {
                                 is AiResult.Success -> {
                                     suggestions[message.id] = result.reply
-                                    statusMessage = "Draft ready. Review it before sending."
+                                    statusMessage = "Draft ready in ${replyStyle.displayName} style. Review it before sending."
                                 }
                                 is AiResult.Failure -> statusMessage = result.message
                             }
@@ -415,6 +480,71 @@ private fun SetupCard(
 }
 
 @Composable
+private fun CommunicationIntelligenceCard(
+    brief: CommunicationBrief,
+    briefText: String,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    onReadAloud: () -> Unit,
+) {
+    Card {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Communication intelligence", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("Today: ${brief.totalMessages} messages from ${brief.distinctSenders} senders")
+            Text("WhatsApp: ${brief.whatsappMessages} • SMS: ${brief.smsMessages} • Finance alerts: ${brief.financialMessages}")
+            Text("Priority messages: ${brief.priorityMessages.size}")
+            brief.topSenders.firstOrNull()?.let { Text("Most active: ${it.sender} (${it.messageCount})") }
+            if (brief.priorityMessages.isNotEmpty()) {
+                val first = brief.priorityMessages.first()
+                Text("Needs attention: ${first.sender} — ${first.reasons.joinToString()}", fontWeight = FontWeight.SemiBold)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onToggleExpanded) { Text(if (expanded) "Hide brief" else "Show full brief") }
+                TextButton(onClick = onReadAloud) { Text("Read brief aloud") }
+            }
+            if (expanded) Text(briefText, style = MaterialTheme.typography.bodySmall)
+            Text(
+                "Priority detection is a local triage aid. It does not mark messages read inside WhatsApp or SMS.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FinanceIntelligenceCard(
+    weekly: PeriodFinanceSummary,
+    monthly: PeriodFinanceSummary,
+    anomalies: List<FinanceAnomaly>,
+) {
+    Card {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Finance intelligence", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("${weekly.label}: in UGX ${weekly.liquidityIn.toPlainString()} • out UGX ${weekly.externalOut.toPlainString()}")
+            Text("7-day net before savings: UGX ${weekly.netBeforeSavings.toPlainString()}")
+            Text("${monthly.label}: in UGX ${monthly.liquidityIn.toPlainString()} • out UGX ${monthly.externalOut.toPlainString()}")
+            Text("Month interest earned: UGX ${monthly.interestEarned.toPlainString()} • paid: UGX ${monthly.interestPaid.toPlainString()}")
+            Text("Month savings in: UGX ${monthly.savingsDeposited.toPlainString()} • out: UGX ${monthly.savingsWithdrawn.toPlainString()}")
+            HorizontalDivider()
+            Text("Anomaly watch", fontWeight = FontWeight.SemiBold)
+            if (anomalies.isEmpty()) {
+                Text("No unusual pattern detected from the history currently available on this phone.")
+            } else {
+                anomalies.take(6).forEach { anomaly ->
+                    val amount = anomaly.amount?.let { " • UGX ${it.toPlainString()}" }.orEmpty()
+                    Text("${anomaly.severity.name}: ${anomaly.title}$amount")
+                    Text(anomaly.detail, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Text(
+                "Trend baselines use only captured, trusted financial notifications retained by Wacha; they are not bank statements.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
 private fun DailyReportSetupCard(
     email: String,
     endpoint: String,
@@ -430,7 +560,7 @@ private fun DailyReportSetupCard(
     Card {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Daily email report", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text("Raw WhatsApp/SMS text stays encrypted on your phone. Only the finished daily report is sent to the secure mail relay.")
+            Text("Raw WhatsApp/SMS text stays encrypted on your phone. Only the finished daily financial report is sent to the secure mail relay.")
             OutlinedTextField(email, onEmailChanged, Modifier.fillMaxWidth(), label = { Text("Send report to email") }, singleLine = true)
             OutlinedTextField(hour, onHourChanged, Modifier.fillMaxWidth(), label = { Text("Evening hour (24-hour clock)") }, singleLine = true)
             OutlinedTextField(endpoint, onEndpointChanged, Modifier.fillMaxWidth(), label = { Text("Secure report relay URL") }, singleLine = true)
@@ -456,6 +586,8 @@ private fun MessageCard(
     accountLabel: String?,
     isFinanceTrusted: Boolean,
     autoReplyEnabled: Boolean,
+    replyStyle: ReplyStyle,
+    replyGuidance: String,
     suggestedReply: String?,
     isLoading: Boolean,
     onReadAloud: () -> Unit,
@@ -463,6 +595,8 @@ private fun MessageCard(
     onAssignMtn: () -> Unit,
     onToggleFinanceTrust: (Boolean) -> Unit,
     onToggleAutoReply: (Boolean) -> Unit,
+    onCycleReplyStyle: () -> Unit,
+    onSaveReplyGuidance: (String) -> Unit,
     onSuggestedReplyChanged: (String) -> Unit,
     onSuggestReply: () -> Unit,
     onSendReply: (String) -> Unit,
@@ -472,6 +606,7 @@ private fun MessageCard(
     }
     val isWhatsApp = message.source != MessageSource.SMS
     val financial = FinanceParser.parse(message)
+    var guidanceDraft by remember(message.conversationKey(), replyGuidance) { mutableStateOf(replyGuidance) }
 
     Card {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -512,10 +647,28 @@ private fun MessageCard(
 
             if (isWhatsApp) {
                 HorizontalDivider()
+                Text("Contact intelligence", fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Reply style: ${replyStyle.displayName}")
+                        Text(replyStyle.instruction, style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(onClick = onCycleReplyStyle) { Text("Change") }
+                }
+                OutlinedTextField(
+                    value = guidanceDraft,
+                    onValueChange = { guidanceDraft = it.take(500) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("What Wacha should remember for this chat") },
+                    supportingText = { Text("Example: client; keep replies formal; never agree to a price without asking me") },
+                    minLines = 2,
+                )
+                OutlinedButton(onClick = { onSaveReplyGuidance(guidanceDraft) }) { Text("Save chat guidance") }
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Auto-answer this chat", fontWeight = FontWeight.SemiBold)
-                        Text("Only normal low-risk messages. Sensitive messages remain manual.", style = MaterialTheme.typography.bodySmall)
+                        Text("Opt-in only. Sensitive money, security, legal and medical messages remain manual.", style = MaterialTheme.typography.bodySmall)
                     }
                     Switch(checked = autoReplyEnabled, onCheckedChange = onToggleAutoReply)
                 }
