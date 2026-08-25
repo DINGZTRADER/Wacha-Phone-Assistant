@@ -47,7 +47,7 @@ object FinanceAnalytics {
         FinanceType.BILL_PAYMENT,
         FinanceType.AIRTIME_PURCHASE,
         FinanceType.LOAN_REPAYMENT,
-        FinanceType.INTEREST_DEBIT,
+        FinanceType.INTEREST_PAID,
         FinanceType.DEDUCTION,
     )
 
@@ -117,7 +117,7 @@ object FinanceAnalytics {
             loansReceived = sumType(FinanceType.LOAN_RECEIVED),
             loanRepayments = sumType(FinanceType.LOAN_REPAYMENT),
             interestEarned = sumType(FinanceType.INTEREST_CREDIT),
-            interestPaid = sumType(FinanceType.INTEREST_DEBIT),
+            interestPaid = sumType(FinanceType.INTEREST_PAID),
             fees = fees,
             deductions = sumType(FinanceType.DEDUCTION),
         )
