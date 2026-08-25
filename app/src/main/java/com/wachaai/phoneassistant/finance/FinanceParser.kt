@@ -68,7 +68,8 @@ object FinanceParser {
         val network = networkOf(message.sender, text)
         val type = classify(lower)
         val allAmounts = extractAmounts(text)
-        val fee = feeRegex.find(text)?.groupValues?.getOrNull(1)?.toMoney()
+        val rawFee = feeRegex.find(text)?.groupValues?.getOrNull(1)?.toMoney()
+        val fee = if (type == FinanceType.INTEREST_PAID && "interest" in lower) null else rawFee
         val balance = balanceRegex.find(text)?.groupValues?.getOrNull(1)?.toMoney()
 
         val excluded = setOfNotNull(fee, balance)
