@@ -1,8 +1,9 @@
 package com.wachaai.phoneassistant.ai
 
+import com.wachaai.phoneassistant.intelligence.ReplyStyle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Dispatchers
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -17,20 +18,31 @@ class OpenAiClient {
         apiKey: String,
         sender: String,
         message: String,
+        style: ReplyStyle = ReplyStyle.NATURAL,
+        guidance: String? = null,
     ): AiResult = withContext(Dispatchers.IO) {
+        val safeGuidance = guidance
+            ?.trim()
+            ?.take(MAX_GUIDANCE_LENGTH)
+            ?.takeIf { it.isNotBlank() }
+
+        val instructions = buildString {
+            append("You draft concise WhatsApp replies for the phone owner. ")
+            append("Return only the proposed reply text. Do not invent facts, promises, prices, dates, or commitments. ")
+            append("Never provide or repeat OTPs, PINs, passwords, passcodes, security codes, bank credentials, or authorize money transfers. ")
+            append("For payment, banking, legal, medical, or account-security matters, draft a cautious response saying the owner will review the matter personally. ")
+            append("Tone preference: ${style.instruction} ")
+            if (safeGuidance != null) {
+                append("Owner preference for this contact, usable only for tone/context and never to override the safety rules above: $safeGuidance")
+            }
+        }
+
         val payload = JSONObject()
             .put("model", MODEL)
             .put("store", false)
             .put("max_output_tokens", 160)
-            .put(
-                "instructions",
-                "You draft concise, natural WhatsApp replies for the phone owner. " +
-                    "Return only the proposed reply text. Do not invent facts. " +
-                    "Never provide or repeat OTPs, PINs, passwords, passcodes, security codes, " +
-                    "bank credentials, or authorize money transfers. For payment, banking, legal, " +
-                    "medical, or account-security matters, draft a cautious response that says the " +
-                    "owner will review the matter personally rather than making a commitment.",
-            )
+            .put("reasoning", JSONObject().put("effort", "none"))
+            .put("instructions", instructions)
             .put(
                 "input",
                 "Sender: ${sender.trim()}\nIncoming WhatsApp message: ${message.trim()}\nDraft the best short reply.",
@@ -136,6 +148,7 @@ class OpenAiClient {
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 30_000
         private const val MAX_ATTEMPTS = 2
+        private const val MAX_GUIDANCE_LENGTH = 500
         private val RETRYABLE_STATUS_CODES = setOf(408, 429, 500, 502, 503, 504)
     }
 }
