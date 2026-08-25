@@ -16,9 +16,11 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.Duration
-import java.time.ZonedDateTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 class DailyReportWorker(
     appContext: Context,
@@ -96,25 +98,34 @@ object ReportDeliveryClient {
         subject: String,
         reportText: String,
     ): DeliveryOutcome = withContext(Dispatchers.IO) {
-        if (!endpoint.startsWith("https://")) {
+        val cleanedEndpoint = endpoint.trim()
+        val cleanedToken = apiToken.trim()
+        if (!cleanedEndpoint.startsWith("https://")) {
             return@withContext DeliveryOutcome.PermanentFailure("Report endpoint must use HTTPS.")
         }
         if (!recipient.contains('@')) {
             return@withContext DeliveryOutcome.PermanentFailure("Report email is invalid.")
         }
+        if (cleanedToken.length < 32) {
+            return@withContext DeliveryOutcome.PermanentFailure("Report relay token is invalid.")
+        }
 
         val payload = JSONObject()
             .put("to", recipient.trim())
-            .put("subject", subject.take(160))
+            .put("subject", subject.replace(Regex("[\\r\\n]+"), " ").take(160))
             .put("text", reportText)
             .toString()
 
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+        val timestamp = (System.currentTimeMillis() / 1000L).toString()
+        val signature = hmacSha256Hex(cleanedToken, "$timestamp.$payload")
+
+        val connection = (URL(cleanedEndpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
             readTimeout = 25_000
             doOutput = true
-            setRequestProperty("Authorization", "Bearer ${apiToken.trim()}")
+            setRequestProperty("X-Wacha-Timestamp", timestamp)
+            setRequestProperty("X-Wacha-Signature", signature)
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
         }
@@ -132,6 +143,12 @@ object ReportDeliveryClient {
         } finally {
             connection.disconnect()
         }
+    }
+
+    internal fun hmacSha256Hex(secret: String, value: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        return mac.doFinal(value.toByteArray(Charsets.UTF_8)).joinToString("") { byte -> "%02x".format(byte) }
     }
 
     private val RETRYABLE_STATUS = setOf(408, 425, 429, 500, 502, 503, 504)
