@@ -28,6 +28,21 @@ class WachaPhoneAssistantApp : Application() {
         secretStore = SecretStore(encryptedStore)
         settingsStore = SettingsStore(encryptedStore)
         autoReplyRegistry = AutoReplyRegistry(encryptedStore)
+
+        val current = settingsStore.settings.value
+        if (current.reportEmail.isBlank()) {
+            settingsStore.saveReportConfig(
+                email = DEFAULT_REPORT_EMAIL,
+                endpoint = current.reportEndpoint,
+                apiToken = current.reportApiToken,
+                hour = current.reportHour,
+            )
+        }
+
         DailyReportWorker.schedule(this, settingsStore.settings.value.reportHour)
+    }
+
+    companion object {
+        private const val DEFAULT_REPORT_EMAIL = "wachaexperience@gmail.com"
     }
 }
