@@ -17,6 +17,7 @@ data class DailyFinanceReport(
     val receipts: BigDecimal,
     val loansReceived: BigDecimal,
     val interestEarned: BigDecimal,
+    val interestPaid: BigDecimal,
     val moneySent: BigDecimal,
     val merchantPayments: BigDecimal,
     val cashWithdrawals: BigDecimal,
@@ -35,7 +36,7 @@ data class DailyFinanceReport(
         get() = receipts + loansReceived + interestEarned + airtimeIn + savingsWithdrawn + reversals
 
     val totalExternalOut: BigDecimal
-        get() = moneySent + merchantPayments + cashWithdrawals + billPayments + airtimeOut + loanRepayments + deductions + fees
+        get() = moneySent + merchantPayments + cashWithdrawals + billPayments + airtimeOut + loanRepayments + interestPaid + deductions + fees
 
     val netWalletMovementBeforeSavings: BigDecimal
         get() = totalLiquidityIn - totalExternalOut
@@ -80,6 +81,7 @@ object DailyReportGenerator {
             receipts = sum(FinanceType.MONEY_RECEIVED),
             loansReceived = sum(FinanceType.LOAN_RECEIVED),
             interestEarned = sum(FinanceType.INTEREST_CREDIT),
+            interestPaid = sum(FinanceType.INTEREST_PAID),
             moneySent = sum(FinanceType.MONEY_SENT),
             merchantPayments = sum(FinanceType.MERCHANT_PAYMENT),
             cashWithdrawals = sum(FinanceType.CASH_WITHDRAWAL),
@@ -103,7 +105,7 @@ object DailyReportGenerator {
         lines += "MONEY IN"
         lines += row("Receipts", report.receipts)
         lines += row("Loans received", report.loansReceived)
-        lines += row("Interest/rewards", report.interestEarned)
+        lines += row("Interest/rewards earned", report.interestEarned)
         lines += row("Savings withdrawn to wallet", report.savingsWithdrawn)
         lines += row("Airtime received", report.airtimeIn)
         lines += row("Reversals/refunds", report.reversals)
@@ -116,6 +118,7 @@ object DailyReportGenerator {
         lines += row("Bills", report.billPayments)
         lines += row("Airtime purchased", report.airtimeOut)
         lines += row("Loan repayments", report.loanRepayments)
+        lines += row("Interest paid/charged", report.interestPaid)
         lines += row("Fees/charges", report.fees)
         lines += row("Other deductions", report.deductions)
         lines += row("TOTAL EXTERNAL OUT", report.totalExternalOut)
