@@ -19,13 +19,13 @@ Before a commercial release, API access will move behind a Wacha-controlled serv
 
 ## Build
 
-The repository includes GitHub Actions CI. On each push to `main`, CI installs Android API 37, runs unit tests, builds the debug APK, and uploads it as the `wacha-phone-assistant-debug` workflow artifact.
+The repository includes GitHub Actions CI. On each push to `main`, CI installs Android API 36, runs unit tests, builds the debug APK, and uploads it as the `wacha-phone-assistant-debug` workflow artifact.
 
 Local requirements:
 
 - Android Studio Quail 3 or newer
 - JDK 17+
-- Android SDK Platform 37
+- Android SDK Platform 36
 - Gradle 9.5+
 
 ## Safety boundary
