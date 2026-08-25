@@ -106,7 +106,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             when (val draft = aiClient.suggestReply(apiKey, message.sender, message.text)) {
                 is AiResult.Success -> {
                     val assessment = RiskClassifier.assess(message.text, draft.reply)
-                    if (assessment.level == RiskLevel.SAFE) {
+                    if (assessment.level == RiskLevel.NORMAL) {
                         sendReplyInternal(message.notificationKey, draft.reply)
                     }
                 }
