@@ -21,6 +21,7 @@ enum class FinanceType {
     SAVINGS_DEPOSIT,
     SAVINGS_WITHDRAWAL,
     INTEREST_CREDIT,
+    INTEREST_PAID,
     LOAN_RECEIVED,
     LOAN_REPAYMENT,
     DEDUCTION,
@@ -102,7 +103,8 @@ object FinanceParser {
     }
 
     private fun classify(lower: String): FinanceType = when {
-        ("interest" in lower || "reward" in lower) && any(lower, "credited", "received", "earned", "paid") -> FinanceType.INTEREST_CREDIT
+        "interest" in lower && any(lower, "charged", "deducted", "debited", "interest due", "loan interest", "interest repayment") -> FinanceType.INTEREST_PAID
+        ("interest" in lower || "reward" in lower) && any(lower, "credited", "received", "earned", "savings interest", "interest paid to you") -> FinanceType.INTEREST_CREDIT
         "loan" in lower && any(lower, "disbursed", "credited", "received", "approved") -> FinanceType.LOAN_RECEIVED
         "loan" in lower && any(lower, "repaid", "repayment", "paid", "deducted") -> FinanceType.LOAN_REPAYMENT
         "saving" in lower && any(lower, "deposit", "deposited", "saved", "transfer to") -> FinanceType.SAVINGS_DEPOSIT
