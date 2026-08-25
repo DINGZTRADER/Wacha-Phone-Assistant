@@ -30,10 +30,10 @@ class WachaPhoneAssistantApp : Application() {
         autoReplyRegistry = AutoReplyRegistry(encryptedStore)
 
         val current = settingsStore.settings.value
-        if (current.reportEmail.isBlank()) {
+        if (current.reportEmail.isBlank() || current.reportEndpoint.isBlank()) {
             settingsStore.saveReportConfig(
-                email = DEFAULT_REPORT_EMAIL,
-                endpoint = current.reportEndpoint,
+                email = current.reportEmail.ifBlank { DEFAULT_REPORT_EMAIL },
+                endpoint = current.reportEndpoint.ifBlank { DEFAULT_REPORT_ENDPOINT },
                 apiToken = current.reportApiToken,
                 hour = current.reportHour,
             )
@@ -44,5 +44,6 @@ class WachaPhoneAssistantApp : Application() {
 
     companion object {
         private const val DEFAULT_REPORT_EMAIL = "wachaexperience@gmail.com"
+        private const val DEFAULT_REPORT_ENDPOINT = "https://wacha-report-relay.netlify.app/api/report"
     }
 }
