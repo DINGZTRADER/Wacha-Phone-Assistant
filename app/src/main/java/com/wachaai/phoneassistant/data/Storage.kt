@@ -51,6 +51,8 @@ data class AssistantSettings(
     val trustedFinanceSenders: Set<String> = emptySet(),
     val accountLabels: Map<String, String> = emptyMap(),
     val autoReplyConversationKeys: Set<String> = emptySet(),
+    val replyStyles: Map<String, String> = emptyMap(),
+    val replyGuidance: Map<String, String> = emptyMap(),
 )
 
 class EncryptedFileStore(
@@ -198,6 +200,27 @@ class SettingsStore(private val encryptedStore: EncryptedFileStore) {
     fun isAutoReplyEnabled(conversationKey: String): Boolean =
         conversationKey in settings.value.autoReplyConversationKeys
 
+    fun setReplyStyle(conversationKey: String, styleName: String) {
+        if (conversationKey.isBlank()) return
+        update { current ->
+            current.copy(replyStyles = current.replyStyles + (conversationKey to styleName.trim()))
+        }
+    }
+
+    fun replyStyleName(conversationKey: String): String? = settings.value.replyStyles[conversationKey]
+
+    fun setReplyGuidance(conversationKey: String, guidance: String) {
+        if (conversationKey.isBlank()) return
+        val cleaned = guidance.trim().take(MAX_GUIDANCE_LENGTH)
+        update { current ->
+            val next = current.replyGuidance.toMutableMap()
+            if (cleaned.isBlank()) next.remove(conversationKey) else next[conversationKey] = cleaned
+            current.copy(replyGuidance = next)
+        }
+    }
+
+    fun replyGuidance(conversationKey: String): String? = settings.value.replyGuidance[conversationKey]
+
     private fun update(transform: (AssistantSettings) -> AssistantSettings) {
         synchronized(lock) {
             val next = transform(_settings.value)
@@ -211,38 +234,30 @@ class SettingsStore(private val encryptedStore: EncryptedFileStore) {
         val json = JSONObject(raw)
         val trusted = json.optJSONArray("trustedFinanceSenders").toStringSet()
         val autoReply = json.optJSONArray("autoReplyConversationKeys").toStringSet()
-        val labelsJson = json.optJSONObject("accountLabels")
-        val labels = buildMap {
-            if (labelsJson != null) {
-                val keys = labelsJson.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    put(key, labelsJson.optString(key))
-                }
-            }
-        }
         AssistantSettings(
             reportEmail = json.optString("reportEmail"),
             reportEndpoint = json.optString("reportEndpoint"),
             reportApiToken = json.optString("reportApiToken"),
             reportHour = json.optInt("reportHour", 19).coerceIn(0, 23),
             trustedFinanceSenders = trusted,
-            accountLabels = labels,
+            accountLabels = json.optJSONObject("accountLabels").toStringMap(),
             autoReplyConversationKeys = autoReply,
+            replyStyles = json.optJSONObject("replyStyles").toStringMap(),
+            replyGuidance = json.optJSONObject("replyGuidance").toStringMap(),
         )
     }.getOrElse { AssistantSettings() }
 
     private fun persist(settings: AssistantSettings) {
-        val labels = JSONObject()
-        settings.accountLabels.forEach { (key, value) -> labels.put(key, value) }
         val json = JSONObject()
             .put("reportEmail", settings.reportEmail)
             .put("reportEndpoint", settings.reportEndpoint)
             .put("reportApiToken", settings.reportApiToken)
             .put("reportHour", settings.reportHour)
             .put("trustedFinanceSenders", JSONArray(settings.trustedFinanceSenders.toList()))
-            .put("accountLabels", labels)
+            .put("accountLabels", settings.accountLabels.toJsonObject())
             .put("autoReplyConversationKeys", JSONArray(settings.autoReplyConversationKeys.toList()))
+            .put("replyStyles", settings.replyStyles.toJsonObject())
+            .put("replyGuidance", settings.replyGuidance.toJsonObject())
         encryptedStore.write(SETTINGS_FILE, json.toString())
     }
 
@@ -255,8 +270,24 @@ class SettingsStore(private val encryptedStore: EncryptedFileStore) {
         }
     }
 
+    private fun JSONObject?.toStringMap(): Map<String, String> {
+        if (this == null) return emptyMap()
+        return buildMap {
+            val keys = keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                optString(key).takeIf { it.isNotBlank() }?.let { put(key, it) }
+            }
+        }
+    }
+
+    private fun Map<String, String>.toJsonObject(): JSONObject = JSONObject().also { json ->
+        forEach { (key, value) -> json.put(key, value) }
+    }
+
     companion object {
         private const val SETTINGS_FILE = "assistant_settings.enc"
+        private const val MAX_GUIDANCE_LENGTH = 500
     }
 }
 
@@ -283,7 +314,7 @@ class AutoReplyRegistry(private val encryptedStore: EncryptedFileStore) {
 
     companion object {
         private const val FILE = "auto_reply_registry.enc"
-        private const val MAX_IDS = 500
+        private const val MAX_IDS = 1000
     }
 }
 
@@ -374,6 +405,6 @@ class MessageRepository(private val encryptedStore: EncryptedFileStore) {
 
     companion object {
         private const val MESSAGES_FILE = "messages.enc"
-        private const val MAX_MESSAGES = 1000
+        private const val MAX_MESSAGES = 5000
     }
 }
